@@ -87,6 +87,16 @@ env_variables: dict[str, Callable[[], Any]] = {
     # (safe for Ascend 910B/A3). Set to a positive value to override when
     # auto-detection is unavailable or for debugging UB overflow issues.
     "VLLM_ASCEND_ROPE_UB_SIZE_KB": lambda: int(os.getenv("VLLM_ASCEND_ROPE_UB_SIZE_KB") or 0),
+    # Experimental MoonViT RoPE on A2/A3: off (default), cache, or fused.
+    # cache reuses FP32 cos/sin per encoder call; fused also requires
+    # triton-ascend and fuses packed Q/K rotation. Not sensitive.
+    "VLLM_ASCEND_KIMI_VIT_ROPE_MODE": lambda: os.getenv("VLLM_ASCEND_KIMI_VIT_ROPE_MODE", "off"),
+    # Opt-in MoonViT token context parallelism inside each language TP group.
+    # Valid experiment sizes: 1 (default/original image DP), 2, 4. Not sensitive.
+    "VLLM_ASCEND_KIMI_VIT_CP_SIZE": lambda: int(os.getenv("VLLM_ASCEND_KIMI_VIT_CP_SIZE", "1")),
+    # Experimental contiguous V copy in the Q/K RoPE launch. Default 0; 0/1.
+    # Used only by the opt-in CP encoder. Not sensitive.
+    "VLLM_ASCEND_KIMI_VIT_COPY_V": lambda: _strict_binary_env("VLLM_ASCEND_KIMI_VIT_COPY_V"),
 }
 
 # end-env-vars-definition

@@ -18,13 +18,52 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import vllm.model_executor.models.kimi_k25 as kimi_model
+import vllm.model_executor.models.kimi_k25_vit as kimi_vision
 from vllm.model_executor.models.kimi_k25_vit import (
     Learnable2DInterpPosEmbDivided_fixed,
+    MoonViT3dEncoder,
     MoonViT3dPretrainedModel,
+    MoonViTEncoderLayer,
     get_rope_shape_decorate,
 )
 
+from vllm_ascend import envs
 from vllm_ascend.device.hardware_profile import HardwareCapability, get_current_hardware_profile
+from vllm_ascend.ops.kimi_vit_cp import create_context, wrap_vision_forward
+from vllm_ascend.ops.kimi_vit_rope import wrap_kimi_vit_attention, wrap_kimi_vit_encoder_forward
+
+
+def _kimi_vit_rope_mode():
+    mode = envs.VLLM_ASCEND_KIMI_VIT_ROPE_MODE
+    if mode != "off" and not get_current_hardware_profile().supports(HardwareCapability.FUSED_ROTARY_MUL_INTERLEAVE):
+        raise NotImplementedError("Experimental Kimi ViT RoPE requires an interleave-capable Ascend device")
+    return mode
+
+
+MoonViT3dEncoder.forward = wrap_kimi_vit_encoder_forward(MoonViT3dEncoder.forward, _kimi_vit_rope_mode)
+MoonViTEncoderLayer.attention_qkvpacked = wrap_kimi_vit_attention(MoonViTEncoderLayer.attention_qkvpacked)
+
+_original_moonvit_init = MoonViT3dPretrainedModel.__init__
+
+
+def _moonvit_init_with_cp(self, *args, **kwargs):
+    _original_moonvit_init(self, *args, **kwargs)
+    size = envs.VLLM_ASCEND_KIMI_VIT_CP_SIZE
+    if size not in (1, 2, 4):
+        raise ValueError("VLLM_ASCEND_KIMI_VIT_CP_SIZE must be 1, 2 or 4")
+    if size > 1:
+        if not self.encoder.blocks[0].use_data_parallel:
+            raise ValueError("MoonViT CP requires replicated visual weights")
+        if _kimi_vit_rope_mode() not in ("cache", "fused"):
+            raise ValueError("MoonViT CP requires batch-scoped RoPE (cache or fused)")
+        self._ascend_cp_context = create_context(size, envs.VLLM_ASCEND_KIMI_VIT_COPY_V)
+
+
+MoonViT3dPretrainedModel.__init__ = _moonvit_init_with_cp
+kimi_vision.vision_tower_forward = wrap_vision_forward(kimi_vision.vision_tower_forward)
+# Upstream imported the function by value; update that binding too.
+kimi_model.vision_tower_forward = kimi_vision.vision_tower_forward
 
 
 @get_rope_shape_decorate

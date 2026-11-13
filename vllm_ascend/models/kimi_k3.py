@@ -15,6 +15,7 @@ from typing import Any, TypeVar, cast
 
 import torch
 import vllm.envs as envs
+import vllm.model_executor.models.kimi_k25_vit as kimi_vision
 from torch import nn
 from vllm.config import CacheConfig, CUDAGraphMode, VllmConfig
 from vllm.distributed import (
@@ -1320,6 +1321,17 @@ class AscendKimiK3ForConditionalGeneration(UpstreamKimiK3ForConditionalGeneratio
 
     def get_language_model(self) -> AscendKimiLinearForCausalLM:
         return self.language_model
+
+    def _process_media_input(self, media_input: dict[str, Any]) -> list[torch.Tensor]:
+        # The upstream AMD class imported vision_tower_forward by value before
+        # worker patches. Resolve the current module binding on the HTTP path.
+        return kimi_vision.vision_tower_forward(
+            self.vision_tower,
+            media_input["pixel_values"],
+            media_input["grid_thws"],
+            mm_projector=self.mm_projector,
+            use_data_parallel=self.use_data_parallel,
+        )
 
     def set_dspark_aux_capture_materialized(self, enabled: bool) -> None:
         self.language_model.set_dspark_aux_capture_materialized(enabled)
